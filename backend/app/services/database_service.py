@@ -418,7 +418,7 @@ class DatabaseService:
             async with await self._get_session() as session:
                 stmt = select(Message).where(
                     and_(Message.session_id == session_id, Message.student_id == student_id)
-                ).order_by(Message.timestamp)
+                ).order_by(Message.timestamp.desc())
 
                 result = await session.execute(stmt)
                 messages = result.scalars().all()
