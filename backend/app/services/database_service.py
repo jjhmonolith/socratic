@@ -10,7 +10,7 @@ from sqlalchemy import select, update, delete, and_, or_, func
 from sqlalchemy.orm import selectinload
 
 from app.core.database import AsyncSessionLocal
-from app.models.database_models import Teacher, Session, Student, Message
+from app.models.database_models import Teacher, Session, Student, Message, ScoreRecord
 
 
 class DatabaseService:
@@ -394,8 +394,8 @@ class DatabaseService:
         """Check if database is enabled."""
         return True  # DatabaseService is always database-enabled
 
-    async def save_message(self, session_id: str, student_id: str, content: str, message_type: str) -> bool:
-        """Save a single message to database."""
+    async def save_message(self, session_id: str, student_id: str, content: str, message_type: str) -> str:
+        """Save a single message to database and return message_id."""
         try:
             async with await self._get_session() as session:
                 new_message = Message(
@@ -407,10 +407,10 @@ class DatabaseService:
                 )
                 session.add(new_message)
                 await session.commit()
-                return True
+                return new_message.id
         except Exception as e:
             print(f"Error saving message: {e}")
-            return False
+            return None
 
     async def get_student_messages(self, session_id: str, student_id: str) -> List[Dict[str, Any]]:
         """Get all messages for a specific student in a session."""
@@ -433,6 +433,110 @@ class DatabaseService:
                 ]
         except Exception as e:
             print(f"Error getting student messages: {e}")
+            return []
+
+    async def save_score_record(
+        self,
+        session_id: str,
+        student_id: str,
+        message_id: str,
+        evaluation_result: Dict[str, Any]
+    ) -> bool:
+        """Save a score record for a student's response."""
+        try:
+            async with await self._get_session() as session:
+                score_record = ScoreRecord(
+                    student_id=student_id,
+                    message_id=message_id,
+                    session_id=session_id,
+                    overall_score=evaluation_result["overall_score"],
+                    depth_score=evaluation_result["dimensions"]["depth"],
+                    breadth_score=evaluation_result["dimensions"]["breadth"],
+                    application_score=evaluation_result["dimensions"]["application"],
+                    metacognition_score=evaluation_result["dimensions"]["metacognition"],
+                    engagement_score=evaluation_result["dimensions"]["engagement"],
+                    is_completed=evaluation_result["is_completed"],
+                    evaluation_data={
+                        "insights": evaluation_result.get("insights", {}),
+                        "growth_indicators": evaluation_result.get("growth_indicators", []),
+                        "next_focus": evaluation_result.get("next_focus", "")
+                    }
+                )
+
+                session.add(score_record)
+                await session.commit()
+
+                # Also update the student's current scores
+                await self._update_student_current_scores(session_id, student_id, evaluation_result)
+
+                print(f"✅ Score record saved for student {student_id}, message {message_id}")
+                return True
+
+        except Exception as e:
+            print(f"❌ Error saving score record: {e}")
+            return False
+
+    async def _update_student_current_scores(
+        self,
+        session_id: str,
+        student_id: str,
+        evaluation_result: Dict[str, Any]
+    ) -> bool:
+        """Update student's current scores in the students table."""
+        try:
+            async with await self._get_session() as session:
+                stmt = update(Student).where(Student.id == student_id).values(
+                    current_score=evaluation_result["overall_score"],
+                    depth_score=evaluation_result["dimensions"]["depth"],
+                    breadth_score=evaluation_result["dimensions"]["breadth"],
+                    application_score=evaluation_result["dimensions"]["application"],
+                    metacognition_score=evaluation_result["dimensions"]["metacognition"],
+                    engagement_score=evaluation_result["dimensions"]["engagement"],
+                    is_completed=evaluation_result["is_completed"],
+                    completed_at=datetime.now(self.kst) if evaluation_result["is_completed"] else None,
+                    last_active=datetime.now(self.kst)
+                )
+
+                result = await session.execute(stmt)
+                await session.commit()
+
+                return result.rowcount > 0
+
+        except Exception as e:
+            print(f"❌ Error updating student current scores: {e}")
+            return False
+
+    async def get_student_score_history(self, session_id: str, student_id: str) -> List[Dict[str, Any]]:
+        """Get score history for a specific student."""
+        try:
+            async with await self._get_session() as session:
+                stmt = select(ScoreRecord).where(
+                    and_(ScoreRecord.session_id == session_id, ScoreRecord.student_id == student_id)
+                ).order_by(ScoreRecord.created_at)
+
+                result = await session.execute(stmt)
+                score_records = result.scalars().all()
+
+                return [
+                    {
+                        "id": record.id,
+                        "message_id": record.message_id,
+                        "overall_score": record.overall_score,
+                        "dimensions": {
+                            "depth": record.depth_score,
+                            "breadth": record.breadth_score,
+                            "application": record.application_score,
+                            "metacognition": record.metacognition_score,
+                            "engagement": record.engagement_score
+                        },
+                        "is_completed": record.is_completed,
+                        "evaluation_data": record.evaluation_data,
+                        "created_at": self._format_korea_time(record.created_at)
+                    }
+                    for record in score_records
+                ]
+        except Exception as e:
+            print(f"Error getting student score history: {e}")
             return []
 
 

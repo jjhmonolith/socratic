@@ -113,8 +113,8 @@ async def add_deleted_at_column():
             raise
 
 
-async def drop_score_records_table():
-    """Drop the score_records table if it exists."""
+async def create_score_records_table():
+    """Create the score_records table if it doesn't exist."""
     async with AsyncSessionLocal() as session:
         try:
             db_type = await _detect_database_type(session)
@@ -135,21 +135,69 @@ async def drop_score_records_table():
             result = await session.execute(check_query)
             table_exists = result.fetchone() is not None
 
-            if table_exists:
+            if not table_exists:
                 if db_type == "postgresql":
-                    drop_query = text("DROP TABLE IF EXISTS score_records CASCADE;")
-                else:
-                    drop_query = text("DROP TABLE IF EXISTS score_records;")
+                    create_query = text("""
+                        CREATE TABLE score_records (
+                            id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::varchar,
+                            student_id VARCHAR(36) NOT NULL,
+                            message_id VARCHAR(36) NOT NULL,
+                            session_id VARCHAR(20) NOT NULL,
+                            overall_score INTEGER NOT NULL,
+                            depth_score INTEGER NOT NULL,
+                            breadth_score INTEGER NOT NULL,
+                            application_score INTEGER NOT NULL,
+                            metacognition_score INTEGER NOT NULL,
+                            engagement_score INTEGER NOT NULL,
+                            is_completed BOOLEAN DEFAULT FALSE,
+                            evaluation_data JSONB,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+                            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+                            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                        );
 
-                await session.execute(drop_query)
+                        CREATE INDEX idx_score_records_student_id ON score_records(student_id);
+                        CREATE INDEX idx_score_records_message_id ON score_records(message_id);
+                        CREATE INDEX idx_score_records_session_id ON score_records(session_id);
+                        CREATE INDEX idx_score_records_created_at ON score_records(created_at DESC);
+                    """)
+                else:
+                    create_query = text("""
+                        CREATE TABLE score_records (
+                            id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+                            student_id TEXT NOT NULL,
+                            message_id TEXT NOT NULL,
+                            session_id TEXT NOT NULL,
+                            overall_score INTEGER NOT NULL,
+                            depth_score INTEGER NOT NULL,
+                            breadth_score INTEGER NOT NULL,
+                            application_score INTEGER NOT NULL,
+                            metacognition_score INTEGER NOT NULL,
+                            engagement_score INTEGER NOT NULL,
+                            is_completed BOOLEAN DEFAULT FALSE,
+                            evaluation_data TEXT,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+                            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+                            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                        );
+
+                        CREATE INDEX idx_score_records_student_id ON score_records(student_id);
+                        CREATE INDEX idx_score_records_message_id ON score_records(message_id);
+                        CREATE INDEX idx_score_records_session_id ON score_records(session_id);
+                        CREATE INDEX idx_score_records_created_at ON score_records(created_at DESC);
+                    """)
+
+                await session.execute(create_query)
                 await session.commit()
-                print("✅ score_records table dropped successfully")
+                print("✅ score_records table created successfully")
             else:
-                print("ℹ️ score_records table does not exist")
+                print("ℹ️ score_records table already exists")
 
         except Exception as e:
             await session.rollback()
-            print(f"❌ Error dropping score_records table: {e}")
+            print(f"❌ Error creating score_records table: {e}")
             raise
 
 
@@ -157,6 +205,6 @@ async def run_migrations():
     """Run all pending migrations."""
     print("🔄 Running database migrations...")
     await drop_session_activities_table()
-    await drop_score_records_table()
     await add_deleted_at_column()
+    await create_score_records_table()
     print("✅ Migrations completed")

@@ -10,6 +10,8 @@ class SocraticChatRequest(BaseModel):
     messages: List[Dict[str, str]]
     understanding_level: int = 0
     difficulty: str = "normal"  # "easy", "normal", "hard"
+    session_id: Optional[str] = None  # For database integration
+    student_id: Optional[str] = None  # For database integration
 
 class SocraticChatResponse(BaseModel):
     socratic_response: str
