@@ -8,6 +8,7 @@ import pytz
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, or_, func
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.database import AsyncSessionLocal
 from app.models.database_models import Teacher, Session, Student, Message, Score
@@ -414,59 +415,46 @@ class DatabaseService:
         return True  # DatabaseService is always database-enabled
 
     async def save_message(self, session_id: str, student_id: str, content: str, message_type: str) -> bool:
-        """Save a single message to database with proper transaction handling and immediate commit."""
+        """Append message to conversation_data JSON array in messages table."""
         try:
-            print(f"🔍 Attempting to save message: session={session_id}, student={student_id}, type={message_type}")
+            print(f"🔍 Saving message to conversation_data: session={session_id}, student={student_id}, type={message_type}")
 
-            # Use explicit transaction control
             async with AsyncSessionLocal() as db_session:
-                async with db_session.begin():  # Explicit transaction
-                    # First verify that the student and session exist
-                    student_stmt = select(Student).where(Student.id == student_id, Student.session_id == session_id)
-                    student_result = await db_session.execute(student_stmt)
-                    student = student_result.scalar_one_or_none()
+                async with db_session.begin():
+                    # Check if message record exists for this student
+                    message_stmt = select(Message).where(Message.student_id == student_id, Message.session_id == session_id)
+                    message_result = await db_session.execute(message_stmt)
+                    message_record = message_result.scalar_one_or_none()
 
-                    if not student:
-                        print(f"❌ Student {student_id} not found in session {session_id}")
-                        return False
+                    new_message_entry = {
+                        "role": message_type,
+                        "content": content
+                    }
 
-                    session_stmt = select(Session).where(Session.id == session_id)
-                    session_result = await db_session.execute(session_stmt)
-                    session_obj = session_result.scalar_one_or_none()
-
-                    if not session_obj:
-                        print(f"❌ Session {session_id} not found")
-                        return False
-
-                    # Create and save the message
-                    new_message = Message(
-                        student_id=student_id,
-                        session_id=session_id,
-                        content=content,
-                        message_type=message_type,
-                        timestamp=datetime.now(self.kst)
-                    )
-
-                    db_session.add(new_message)
-                    await db_session.flush()  # Flush to get the ID
-                    message_id = new_message.id
-                    print(f"🔍 Message flushed to session with ID: {message_id}")
-
-                # Transaction is automatically committed here
-                print(f"✅ Message transaction committed successfully: {message_id}")
-
-                # Verify in a new transaction to ensure persistence
-                async with AsyncSessionLocal() as verify_session:
-                    verify_stmt = select(Message).where(Message.id == message_id)
-                    verify_result = await verify_session.execute(verify_stmt)
-                    saved_message = verify_result.scalar_one_or_none()
-
-                    if saved_message:
-                        print(f"✅ Message persistence verified: {message_id}")
-                        return True
+                    if message_record:
+                        # Append to existing conversation_data
+                        conversation_data = message_record.conversation_data or []
+                        conversation_data.append(new_message_entry)
+                        message_record.conversation_data = conversation_data
+                        # IMPORTANT: Mark the JSON field as modified for SQLAlchemy to detect changes
+                        flag_modified(message_record, "conversation_data")
+                        message_record.timestamp = datetime.now(self.kst)
+                        print(f"✅ Appended message to existing conversation (total: {len(conversation_data)} messages)")
                     else:
-                        print(f"❌ Message persistence verification failed: {message_id}")
-                        return False
+                        # Create new message record with first message
+                        new_message_record = Message(
+                            student_id=student_id,
+                            session_id=session_id,
+                            conversation_data=[new_message_entry],
+                            timestamp=datetime.now(self.kst)
+                        )
+                        db_session.add(new_message_record)
+                        print(f"✅ Created new message record for student")
+
+                    await db_session.flush()
+
+                print(f"✅ Message saved successfully")
+                return True
 
         except Exception as e:
             print(f"❌ Error saving message: {e}")
@@ -475,57 +463,34 @@ class DatabaseService:
             return False
 
     async def get_student_messages(self, session_id: str, student_id: str) -> List[Dict[str, Any]]:
-        """Get all messages for a specific student in a session with fresh transaction."""
+        """Get conversation_data from messages table."""
         try:
-            print(f"🔍 Getting messages for session={session_id}, student={student_id}")
+            print(f"🔍 Getting conversation_data for session={session_id}, student={student_id}")
 
-            # Use a fresh session to avoid any stale transaction issues
-            async with AsyncSessionLocal() as fresh_session:
-                # First verify the student exists
-                student_stmt = select(Student).where(Student.id == student_id, Student.session_id == session_id)
-                student_result = await fresh_session.execute(student_stmt)
-                student = student_result.scalar_one_or_none()
+            async with AsyncSessionLocal() as db_session:
+                # Get message record for this student
+                message_stmt = select(Message).where(Message.student_id == student_id, Message.session_id == session_id)
+                message_result = await db_session.execute(message_stmt)
+                message_record = message_result.scalar_one_or_none()
 
-                if not student:
-                    print(f"❌ Student {student_id} not found in session {session_id}")
+                if not message_record:
+                    print(f"ℹ️ No message record found for student {student_id}")
                     return []
 
-                # Get messages for this student in this session - use fresh query
-                from sqlalchemy import select, and_, text
+                # Get conversation_data
+                conversation_data = message_record.conversation_data or []
 
-                # Force a fresh read from the database (bypass any cache)
-                await fresh_session.execute(text("COMMIT"))  # Ensure we see latest committed data
+                print(f"✅ Loaded {len(conversation_data)} messages from conversation_data")
 
-                stmt = select(Message).where(
-                    and_(Message.session_id == session_id, Message.student_id == student_id)
-                ).order_by(Message.timestamp.desc())
-
-                result = await fresh_session.execute(stmt)
-                messages = result.scalars().all()
-
-                print(f"🔍 Found {len(messages)} messages for student in database")
-
+                # Convert to expected format (role → message_type for compatibility)
                 result_list = [
                     {
-                        "content": msg.content,
-                        "message_type": msg.message_type,
-                        "timestamp": self._format_korea_time(msg.timestamp) if msg.timestamp else None
+                        "content": msg.get("content", ""),
+                        "message_type": msg.get("role", "user"),  # role → message_type
+                        "timestamp": None  # No individual timestamps in JSON storage
                     }
-                    for msg in messages
+                    for msg in conversation_data
                 ]
-
-                print(f"✅ Returning {len(result_list)} messages")
-
-                # Debug: Print message content for tracking
-                if result_list:
-                    print(f"🔍 Recent messages: {[msg['content'][:30] + '...' for msg in result_list[:3]]}")
-                else:
-                    print("🔍 No messages found - checking if any messages exist for this student globally")
-                    # Global check to see if there are any messages for this student
-                    global_stmt = select(Message).where(Message.student_id == student_id)
-                    global_result = await fresh_session.execute(global_stmt)
-                    global_messages = global_result.scalars().all()
-                    print(f"🔍 Global message count for student {student_id}: {len(global_messages)}")
 
                 return result_list
 
@@ -627,6 +592,224 @@ class DatabaseService:
                 ]
         except Exception as e:
             print(f"Error getting student scores: {e}")
+            return []
+
+    async def get_session_scores(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get all score records for a session."""
+        try:
+            async with await self._get_session() as session:
+                stmt = select(Score, Student.name).join(
+                    Student, Score.student_id == Student.id
+                ).where(
+                    Score.session_id == session_id
+                ).order_by(Score.created_at.desc())
+
+                result = await session.execute(stmt)
+                score_student_pairs = result.all()
+
+                return [
+                    {
+                        "id": score.id,
+                        "message_id": score.message_id,
+                        "student_id": score.student_id,
+                        "student_name": student_name,
+                        "overall_score": score.overall_score,
+                        "dimensions": {
+                            "depth": score.depth_score,
+                            "breadth": score.breadth_score,
+                            "application": score.application_score,
+                            "metacognition": score.metacognition_score,
+                            "engagement": score.engagement_score
+                        },
+                        "evaluation_data": score.evaluation_data,
+                        "is_completed": score.is_completed,
+                        "created_at": self._format_korea_time(score.created_at) if score.created_at else None
+                    }
+                    for score, student_name in score_student_pairs
+                ]
+        except Exception as e:
+            print(f"Error getting session scores: {e}")
+            return []
+
+    async def get_session_by_id(self, session_id: str) -> Optional[Session]:
+        """Get a session by ID."""
+        try:
+            async with await self._get_session() as session:
+                stmt = select(Session).options(selectinload(Session.teacher)).where(
+                    and_(Session.id == session_id, Session.deleted_at.is_(None))
+                )
+                result = await session.execute(stmt)
+                return result.scalar_one_or_none()
+        except Exception as e:
+            print(f"Error getting session {session_id}: {e}")
+            return None
+
+    async def get_student_by_token(self, session_id: str, token: str) -> Optional[Student]:
+        """Get a student by token in a specific session."""
+        try:
+            async with await self._get_session() as session:
+                stmt = select(Student).where(
+                    and_(Student.session_id == session_id, Student.token == token)
+                )
+                result = await session.execute(stmt)
+                return result.scalar_one_or_none()
+        except Exception as e:
+            print(f"Error getting student by token: {e}")
+            return None
+
+    async def get_student_by_name(self, session_id: str, name: str) -> Optional[Student]:
+        """Get a student by name in a specific session."""
+        try:
+            async with await self._get_session() as session:
+                stmt = select(Student).where(
+                    and_(Student.session_id == session_id, func.lower(Student.name) == name.lower())
+                )
+                result = await session.execute(stmt)
+                return result.scalar_one_or_none()
+        except Exception as e:
+            print(f"Error getting student by name: {e}")
+            return None
+
+    async def get_student_by_id(self, student_id: str) -> Optional[Student]:
+        """Get a student by ID."""
+        try:
+            async with await self._get_session() as session:
+                stmt = select(Student).where(Student.id == student_id)
+                result = await session.execute(stmt)
+                return result.scalar_one_or_none()
+        except Exception as e:
+            print(f"Error getting student by ID: {e}")
+            return None
+
+    async def get_students_by_session(self, session_id: str) -> List[Student]:
+        """Get all students in a session."""
+        try:
+            async with await self._get_session() as session:
+                stmt = select(Student).where(Student.session_id == session_id).order_by(Student.joined_at)
+                result = await session.execute(stmt)
+                return result.scalars().all()
+        except Exception as e:
+            print(f"Error getting students for session {session_id}: {e}")
+            return []
+
+    async def get_message_count(self, student_id: str, message_type: str = 'user') -> int:
+        """Get count of messages for a student by type."""
+        try:
+            async with await self._get_session() as session:
+                stmt = select(func.count(Message.id)).where(
+                    and_(Message.student_id == student_id, Message.message_type == message_type)
+                )
+                result = await session.execute(stmt)
+                return result.scalar() or 0
+        except Exception as e:
+            print(f"Error getting message count: {e}")
+            return 0
+
+    async def update_student_progress(
+        self,
+        student_id: str,
+        understanding_score: int,
+        dimensions: Dict[str, int],
+        is_completed: bool = False
+    ) -> bool:
+        """Update student progress in database."""
+        try:
+            async with await self._get_session() as session:
+                stmt = select(Student).where(Student.id == student_id)
+                result = await session.execute(stmt)
+                student = result.scalar_one_or_none()
+
+                if not student:
+                    return False
+
+                # Update student fields
+                student.last_active = datetime.now(self.kst)
+                student.current_score = understanding_score
+                student.conversation_turns += 1
+                student.depth_score = dimensions.get('depth', 0)
+                student.breadth_score = dimensions.get('breadth', 0)
+                student.application_score = dimensions.get('application', 0)
+                student.metacognition_score = dimensions.get('metacognition', 0)
+                student.engagement_score = dimensions.get('engagement', 0)
+
+                if is_completed and not student.is_completed:
+                    student.is_completed = True
+                    student.completed_at = datetime.now(self.kst)
+
+                await session.commit()
+                return True
+        except Exception as e:
+            print(f"Error updating student progress: {e}")
+            return False
+
+    async def create_student(
+        self,
+        student_id: str,
+        session_id: str,
+        name: str,
+        token: str
+    ) -> Optional[Student]:
+        """Create a new student."""
+        try:
+            async with await self._get_session() as session:
+                new_student = Student(
+                    id=student_id,
+                    session_id=session_id,
+                    name=name,
+                    token=token,
+                    joined_at=datetime.now(self.kst),
+                    last_active=datetime.now(self.kst),
+                    conversation_turns=0,
+                    current_score=0,
+                    depth_score=0,
+                    breadth_score=0,
+                    application_score=0,
+                    metacognition_score=0,
+                    engagement_score=0,
+                    is_completed=False
+                )
+                session.add(new_student)
+                await session.commit()
+                await session.refresh(new_student)
+                return new_student
+        except Exception as e:
+            print(f"Error creating student: {e}")
+            return None
+
+    async def update_student_last_active(self, student_id: str) -> bool:
+        """Update student's last active timestamp."""
+        try:
+            async with await self._get_session() as session:
+                stmt = update(Student).where(Student.id == student_id).values(
+                    last_active=datetime.now(self.kst)
+                )
+                await session.execute(stmt)
+                await session.commit()
+                return True
+        except Exception as e:
+            print(f"Error updating student last active: {e}")
+            return False
+
+    async def get_sessions_by_teacher(self, teacher_fingerprint: str) -> List[Session]:
+        """Get all non-deleted sessions for a teacher."""
+        try:
+            async with await self._get_session() as session:
+                # First get teacher
+                teacher_stmt = select(Teacher).where(Teacher.fingerprint == teacher_fingerprint)
+                teacher_result = await session.execute(teacher_stmt)
+                teacher = teacher_result.scalar_one_or_none()
+
+                if not teacher:
+                    return []
+
+                # Get sessions
+                stmt = select(Session).where(
+                    and_(Session.teacher_id == teacher.id, Session.deleted_at.is_(None))
+                ).order_by(Session.created_at.desc())
+                result = await session.execute(stmt)
+                return result.scalars().all()
+        except Exception as e:
+            print(f"Error getting sessions for teacher: {e}")
             return []
 
 

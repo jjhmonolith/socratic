@@ -30,7 +30,7 @@ allow_origin_regex = settings.allow_origin_regex
 print(f"🔧 CORS DEBUG - Allowed origins: {settings.allow_origins}")
 print(f"🔧 CORS DEBUG - Origin regex: {allow_origin_regex}")
 print(f"🔧 CORS DEBUG - ALLOWED_ORIGINS env: {settings._allowed_origins_raw}")
-print(f"💾 Storage mode: {'Database' if settings.use_database else 'File-based'}")
+print(f"💾 Storage mode: Database (PostgreSQL)")
 print(f"🗄️ Database URL: {settings.database_url}")
 
 app.add_middleware(
@@ -72,24 +72,21 @@ app.include_router(pdf_router, prefix="/api/v1")
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database on startup if using database storage."""
-    if settings.use_database:
-        try:
-            print("🗄️ Initializing database...")
+    """Initialize database on startup."""
+    try:
+        print("🗄️ Initializing database...")
 
-            # First create/verify tables
-            await create_tables()
-            print("✅ Database tables created/verified successfully")
+        # First create/verify tables
+        await create_tables()
+        print("✅ Database tables created/verified successfully")
 
-            # Then run migrations to add any missing columns
-            from app.core.migrations import run_migrations
-            await run_migrations()
+        # Then run migrations to add any missing columns
+        from app.core.migrations import run_migrations
+        await run_migrations()
 
-        except Exception as e:
-            print(f"❌ Database initialization failed: {e}")
-            # Don't crash the app, fall back to file storage
-            settings.use_database = False
-            print("⚠️ Falling back to file-based storage")
+    except Exception as e:
+        print(f"❌ Database initialization failed: {e}")
+        raise  # Crash the app if DB fails - no fallback
 
 
 @app.get("/")

@@ -219,13 +219,22 @@ async def get_session_info(session_id: str):
     """Get session info for student (public endpoint)"""
     try:
         session_service = get_session_service()
+        storage_service = get_storage_service()
 
-        # Check if session exists and is active
-        session_data = session_service.active_sessions.get(session_id)
-        if not session_data:
+        # Check if session exists in database
+        db_session = await storage_service.get_session_by_id(session_id)
+        if not db_session:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        config = SessionConfig(**session_data['config'])
+        config = SessionConfig(
+            title=db_session.title,
+            topic=db_session.topic,
+            description=db_session.description,
+            difficulty=db_session.difficulty,
+            show_score=db_session.show_score,
+            time_limit=db_session.time_limit,
+            max_students=db_session.max_students
+        )
 
         return {
             "session": {
@@ -269,18 +278,17 @@ async def join_session(session_id: str, request: SessionJoinRequest, http_reques
 
             # Save initial AI message to database
             storage_service = get_storage_service()
-            if storage_service and await storage_service.is_database_enabled():
-                try:
-                    print(f"💬 Saving initial AI message for student {student_id}: {initial_message[:50]}...")
-                    result = await storage_service.save_message(
-                        session_id=session_id,
-                        student_id=student_id,
-                        content=initial_message,
-                        message_type="assistant"
-                    )
-                    print(f"✅ Initial AI message saved successfully: {result}")
-                except Exception as e:
-                    print(f"❌ Warning: Could not save initial AI message: {e}")
+            try:
+                print(f"💬 Saving initial AI message for student {student_id}: {initial_message[:50]}...")
+                result = await storage_service.save_message(
+                    session_id=session_id,
+                    student_id=student_id,
+                    content=initial_message,
+                    message_type="assistant"
+                )
+                print(f"✅ Initial AI message saved successfully: {result}")
+            except Exception as e:
+                print(f"❌ Warning: Could not save initial AI message: {e}")
         else:
             # For returning students, we won't show a separate initial message
             # The frontend will load previous chat history instead
@@ -309,10 +317,11 @@ async def download_qr_code(session_id: str, request: Request):
     try:
         session_service = get_session_service()
         qr_service = get_qr_service()
+        storage_service = get_storage_service()
 
-        # Check if session exists
-        session_data = session_service.active_sessions.get(session_id)
-        if not session_data:
+        # Check if session exists in database
+        db_session = await storage_service.get_session_by_id(session_id)
+        if not db_session:
             raise HTTPException(status_code=404, detail="Session not found")
 
         # Generate QR code for download (larger size) - use Vercel frontend URL
@@ -340,50 +349,51 @@ async def session_chat(session_id: str, request: SessionChatRequest):
         assessment_service = get_socratic_assessment_service()
         storage_service = get_storage_service()
 
-        # Verify session exists and is active
-        session_data = session_service.active_sessions.get(session_id)
-        if not session_data:
+        # Verify session exists in database
+        db_session = await storage_service.get_session_by_id(session_id)
+        if not db_session:
             raise HTTPException(status_code=404, detail="Session not found")
 
         # Verify student is part of this session
-        student_exists = False
-        if hasattr(session_service, 'session_students'):
-            session_students = session_service.session_students.get(session_id, {})
-            if request.student_id in session_students:
-                student_exists = True
-
-        if not student_exists:
+        db_student = await storage_service.get_student_by_id(request.student_id)
+        if not db_student or db_student.session_id != session_id:
             raise HTTPException(status_code=403, detail="Student not authorized for this session")
 
         # Get session configuration
-        config = SessionConfig(**session_data['config'])
+        config = SessionConfig(
+            title=db_session.title,
+            topic=db_session.topic,
+            description=db_session.description,
+            difficulty=db_session.difficulty,
+            show_score=db_session.show_score,
+            time_limit=db_session.time_limit,
+            max_students=db_session.max_students
+        )
 
         # Get student's chat history from database if available
         messages = []
-        if storage_service and await storage_service.is_database_enabled():
-            # Get previous messages for this student in this session
-            try:
-                stored_messages = await storage_service.get_student_messages(session_id, request.student_id)
-                # Reverse the order since we get them newest-first from DB, but need oldest-first for conversation context
-                stored_messages.reverse()
-                messages = [{"role": msg["message_type"], "content": msg["content"]} for msg in stored_messages]
-            except Exception as e:
-                print(f"Warning: Could not load message history: {e}")
+        # Get previous messages for this student in this session
+        try:
+            stored_messages = await storage_service.get_student_messages(session_id, request.student_id)
+            # Reverse the order since we get them newest-first from DB, but need oldest-first for conversation context
+            stored_messages.reverse()
+            messages = [{"role": msg["message_type"], "content": msg["content"]} for msg in stored_messages]
+        except Exception as e:
+            print(f"Warning: Could not load message history: {e}")
 
         # Add the new user message
         messages.append({"role": "user", "content": request.message})
 
         # Store user message in database
-        if storage_service and await storage_service.is_database_enabled():
-            try:
-                await storage_service.save_message(
-                    session_id=session_id,
-                    student_id=request.student_id,
-                    content=request.message,
-                    message_type="user"
-                )
-            except Exception as e:
-                print(f"Warning: Could not save user message: {e}")
+        try:
+            await storage_service.save_message(
+                session_id=session_id,
+                student_id=request.student_id,
+                content=request.message,
+                message_type="user"
+            )
+        except Exception as e:
+            print(f"Warning: Could not save user message: {e}")
 
         # Generate AI response
         socratic_response = await socratic_service.generate_socratic_response(
@@ -392,45 +402,44 @@ async def session_chat(session_id: str, request: SessionChatRequest):
             0  # understanding_level - will be calculated
         )
 
+        # Add AI response to messages array for complete conversation context in evaluation
+        messages.append({"role": "assistant", "content": socratic_response})
+
         # Store AI response in database
         message_id = None
-        if storage_service and await storage_service.is_database_enabled():
+        try:
+            print(f"💬 Saving AI message for student {request.student_id}: {socratic_response[:50]}...")
+
+            result = await storage_service.save_message(
+                session_id=session_id,
+                student_id=request.student_id,
+                content=socratic_response,
+                message_type="assistant"
+            )
+            print(f"✅ AI message saved successfully: {result}")
+
+            # Get the message record ID for score record (one per student)
             try:
-                print(f"💬 Saving AI message for student {request.student_id}: {socratic_response[:50]}...")
+                from app.models.database_models import Message
+                from app.core.database import AsyncSessionLocal
+                from sqlalchemy import select
 
-                result = await storage_service.save_message(
-                    session_id=session_id,
-                    student_id=request.student_id,
-                    content=socratic_response,
-                    message_type="assistant"
-                )
-                print(f"✅ AI message saved successfully: {result}")
+                async with AsyncSessionLocal() as db_session:
+                    stmt = select(Message.id).where(
+                        Message.student_id == request.student_id,
+                        Message.session_id == session_id
+                    )
+                    result = await db_session.execute(stmt)
+                    message_id = result.scalar_one_or_none()
+                    print(f"📝 Found message record ID for scoring: {message_id}")
+            except Exception as msg_id_error:
+                print(f"⚠️ Could not retrieve message ID: {msg_id_error}")
+                message_id = None
 
-                # Get the user message ID for score record
-                try:
-                    from app.models.database_models import Message
-                    from app.core.database import AsyncSessionLocal
-                    from sqlalchemy import select, and_, desc
-
-                    async with AsyncSessionLocal() as db_session:
-                        stmt = select(Message.id).where(
-                            and_(
-                                Message.session_id == session_id,
-                                Message.student_id == request.student_id,
-                                Message.message_type == "user"
-                            )
-                        ).order_by(desc(Message.timestamp)).limit(1)
-                        result = await db_session.execute(stmt)
-                        message_id = result.scalar_one_or_none()
-                        print(f"📝 Found user message ID for scoring: {message_id}")
-                except Exception as msg_id_error:
-                    print(f"⚠️ Could not retrieve user message ID: {msg_id_error}")
-                    message_id = None
-
-            except Exception as e:
-                print(f"❌ Error saving AI message: {e}")
-                import traceback
-                traceback.print_exc()
+        except Exception as e:
+            print(f"❌ Error saving AI message: {e}")
+            import traceback
+            traceback.print_exc()
 
         # Evaluate understanding using the new message and AI response
         evaluation_result = await assessment_service.evaluate_socratic_dimensions(
@@ -445,7 +454,7 @@ async def session_chat(session_id: str, request: SessionChatRequest):
         is_completed = evaluation_result["is_completed"]
 
         # Record score in database
-        if storage_service and await storage_service.is_database_enabled() and message_id:
+        if message_id:
             try:
                 await storage_service.save_score(
                     message_id=message_id,
@@ -464,7 +473,8 @@ async def session_chat(session_id: str, request: SessionChatRequest):
             except Exception as e:
                 print(f"Warning: Could not save score to database: {e}")
 
-        # Update student progress in session service (without saving message again)
+        # Update student progress in session service
+        # Note: Message is already saved above, no duplicate save needed
         try:
             await session_service.update_student_progress(
                 session_id,
@@ -472,7 +482,7 @@ async def session_chat(session_id: str, request: SessionChatRequest):
                 understanding_score,
                 evaluation_result["dimensions"],
                 is_completed,
-                ""  # Don't save message again - already saved above
+                ""  # Message already saved separately above
             )
         except Exception as e:
             print(f"Warning: Could not update student progress: {e}")
@@ -497,21 +507,37 @@ async def validate_session(session_id: str, request: Request):
     """Validate if session exists and is accessible by teacher"""
     try:
         session_service = get_session_service()
+        storage_service = get_storage_service()
 
         # Generate teacher fingerprint
         teacher_fingerprint = session_service.generate_browser_fingerprint(dict(request.headers))
 
-        # Check if session exists in active sessions
-        session_data = session_service.active_sessions.get(session_id)
-        if not session_data:
+        # Check if session exists in database
+        db_session = await storage_service.get_session_by_id(session_id)
+        if not db_session:
             return {"valid": False, "session": None}
 
         # Check if session belongs to this teacher
-        if session_data.get('teacher_fingerprint') != teacher_fingerprint:
+        if db_session.teacher.fingerprint != teacher_fingerprint:
             return {"valid": False, "session": None}
 
-        # Convert datetime objects for JSON serialization
-        session_copy = session_data.copy()
+        # Convert to dict for JSON serialization
+        session_copy = {
+            'id': db_session.id,
+            'teacher_fingerprint': db_session.teacher.fingerprint,
+            'config': {
+                'title': db_session.title,
+                'topic': db_session.topic,
+                'description': db_session.description,
+                'difficulty': db_session.difficulty,
+                'show_score': db_session.show_score,
+                'time_limit': db_session.time_limit,
+                'max_students': db_session.max_students
+            },
+            'status': db_session.status,
+            'created_at': db_session.created_at.isoformat(),
+            'expires_at': db_session.expires_at.isoformat()
+        }
         for field in ['created_at', 'expires_at', 'last_activity', 'ended_at']:
             if field in session_copy and hasattr(session_copy[field], 'isoformat'):
                 session_copy[field] = session_copy[field].isoformat()
@@ -535,24 +561,24 @@ async def archive_session(session_id: str, request: Request):
     """Soft archive a session (doesn't delete, but marks as inactive)"""
     try:
         session_service = get_session_service()
+        storage_service = get_storage_service()
 
         # Generate teacher fingerprint
         teacher_fingerprint = session_service.generate_browser_fingerprint(dict(request.headers))
 
-        # Check if session exists and belongs to teacher
-        session_data = session_service.active_sessions.get(session_id)
-        if not session_data:
+        # Check if session exists in database and belongs to teacher
+        db_session = await storage_service.get_session_by_id(session_id)
+        if not db_session:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        if session_data.get('teacher_fingerprint') != teacher_fingerprint:
+        if db_session.teacher.fingerprint != teacher_fingerprint:
             raise HTTPException(status_code=403, detail="Not authorized to archive this session")
 
-        # Mark session as archived (keep data but mark as inactive)
-        session_data['status'] = 'archived'
-        session_data['archived_at'] = datetime.now()
+        # Mark session as deleted (soft delete - data preserved)
+        success = await session_service.delete_session(session_id, teacher_fingerprint)
 
-        # Optional: Remove from active sessions but keep in a separate archived sessions store
-        # For now, we'll just mark it as archived
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to archive session")
 
         return {"success": True, "message": "Session archived successfully"}
 
@@ -581,20 +607,17 @@ async def get_session_scores(session_id: str, request: Request):
 
         # Validate teacher access
         teacher_fingerprint = session_service.generate_browser_fingerprint(dict(request.headers))
-        session_data = session_service.active_sessions.get(session_id)
+        db_session = await storage_service.get_session_by_id(session_id)
 
-        if not session_data:
+        if not db_session:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        if session_data.get('teacher_fingerprint') != teacher_fingerprint:
+        if db_session.teacher.fingerprint != teacher_fingerprint:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Get scores from database if available
-        if storage_service and await storage_service.is_database_enabled():
-            scores = await storage_service.get_session_scores(session_id)
-            return {"scores": scores}
-        else:
-            return {"scores": [], "message": "Database not available"}
+        scores = await storage_service.get_session_scores(session_id)
+        return {"scores": scores}
 
     except HTTPException:
         raise
@@ -611,20 +634,17 @@ async def get_student_scores(session_id: str, student_id: str, request: Request)
 
         # Validate teacher access
         teacher_fingerprint = session_service.generate_browser_fingerprint(dict(request.headers))
-        session_data = session_service.active_sessions.get(session_id)
+        db_session = await storage_service.get_session_by_id(session_id)
 
-        if not session_data:
+        if not db_session:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        if session_data.get('teacher_fingerprint') != teacher_fingerprint:
+        if db_session.teacher.fingerprint != teacher_fingerprint:
             raise HTTPException(status_code=403, detail="Access denied")
 
-        # Get scores from database if available
-        if storage_service and await storage_service.is_database_enabled():
-            scores = await storage_service.get_student_scores(session_id, student_id)
-            return {"scores": scores}
-        else:
-            return {"scores": [], "message": "Database not available"}
+        # Get scores from database
+        scores = await storage_service.get_student_scores(session_id, student_id)
+        return {"scores": scores}
 
     except HTTPException:
         raise
@@ -637,33 +657,25 @@ async def get_student_chat_history(session_id: str, student_id: str):
     """Get chat history for a specific student (public endpoint for student access)"""
     try:
         session_service = get_session_service()
-        storage_service = session_service.storage_service
+        storage_service = get_storage_service()
 
-        # Verify session exists and is active
-        session_data = session_service.active_sessions.get(session_id)
-        if not session_data:
+        # Verify session exists in database
+        db_session = await storage_service.get_session_by_id(session_id)
+        if not db_session:
             raise HTTPException(status_code=404, detail="Session not found")
 
         # Verify student is part of this session
-        student_exists = False
-        if hasattr(session_service, 'session_students'):
-            session_students = session_service.session_students.get(session_id, {})
-            if student_id in session_students:
-                student_exists = True
-
-        if not student_exists:
+        db_student = await storage_service.get_student_by_id(student_id)
+        if not db_student or db_student.session_id != session_id:
             raise HTTPException(status_code=403, detail="Student not authorized for this session")
 
-        # Get chat history from database if available
-        if storage_service and await storage_service.is_database_enabled():
-            try:
-                messages = await storage_service.get_student_messages(session_id, student_id)
-                return {"messages": messages}
-            except Exception as e:
-                print(f"Warning: Could not load message history: {e}")
-                return {"messages": []}
-        else:
-            return {"messages": [], "message": "Database not available"}
+        # Get chat history from database
+        try:
+            messages = await storage_service.get_student_messages(session_id, student_id)
+            return {"messages": messages}
+        except Exception as e:
+            print(f"Warning: Could not load message history: {e}")
+            return {"messages": []}
 
     except HTTPException:
         raise
