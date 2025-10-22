@@ -378,126 +378,6 @@ async def check_database_health():
             return False
 
 
-async def add_topic_tracking_fields():
-    """Add topic tracking fields to sessions table."""
-    async with AsyncSessionLocal() as session:
-        try:
-            db_type = await _detect_database_type(session)
-
-            # Check if topic_type column already exists
-            if db_type == "postgresql":
-                check_query = text("""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name = 'sessions' AND column_name = 'topic_type';
-                """)
-            else:
-                # SQLite
-                check_query = text("PRAGMA table_info(sessions);")
-
-            result = await session.execute(check_query)
-
-            if db_type == "postgresql":
-                existing_columns = [row[0] for row in result.fetchall()]
-                topic_type_exists = 'topic_type' in existing_columns
-            else:
-                # SQLite PRAGMA returns (cid, name, type, notnull, dflt_value, pk)
-                existing_columns = [row[1] for row in result.fetchall()]
-                topic_type_exists = 'topic_type' in existing_columns
-
-            if not topic_type_exists:
-                print("➕ Adding topic tracking fields to sessions table...")
-
-                if db_type == "postgresql":
-                    # PostgreSQL version
-                    migration_sql = text("""
-                        ALTER TABLE sessions
-                        ADD COLUMN IF NOT EXISTS topic_type VARCHAR(20) DEFAULT 'manual',
-                        ADD COLUMN IF NOT EXISTS topic_source VARCHAR(20) DEFAULT 'manual',
-                        ADD COLUMN IF NOT EXISTS pdf_noun_topic VARCHAR(500),
-                        ADD COLUMN IF NOT EXISTS pdf_sentence_topic TEXT,
-                        ADD COLUMN IF NOT EXISTS pdf_summary_topic TEXT,
-                        ADD COLUMN IF NOT EXISTS pdf_original_content TEXT,
-                        ADD COLUMN IF NOT EXISTS manual_topic_content TEXT,
-                        ADD COLUMN IF NOT EXISTS final_topic_content TEXT,
-                        ADD COLUMN IF NOT EXISTS topic_metadata JSONB;
-
-                        CREATE INDEX IF NOT EXISTS idx_sessions_topic_type ON sessions(topic_type);
-                        CREATE INDEX IF NOT EXISTS idx_sessions_topic_source ON sessions(topic_source);
-
-                        UPDATE sessions
-                        SET
-                            final_topic_content = topic,
-                            topic_type = 'manual',
-                            topic_source = 'manual'
-                        WHERE final_topic_content IS NULL OR final_topic_content = '';
-
-                        UPDATE sessions
-                        SET final_topic_content = topic
-                        WHERE final_topic_content IS NULL;
-                    """)
-                else:
-                    # SQLite version - add columns one by one
-                    columns_to_add = [
-                        ("topic_type", "VARCHAR(20) DEFAULT 'manual'"),
-                        ("topic_source", "VARCHAR(20) DEFAULT 'manual'"),
-                        ("pdf_noun_topic", "VARCHAR(500)"),
-                        ("pdf_sentence_topic", "TEXT"),
-                        ("pdf_summary_topic", "TEXT"),
-                        ("pdf_original_content", "TEXT"),
-                        ("manual_topic_content", "TEXT"),
-                        ("final_topic_content", "TEXT"),
-                        ("topic_metadata", "TEXT")  # SQLite uses TEXT for JSON
-                    ]
-
-                    for column_name, column_type in columns_to_add:
-                        # Check if this specific column exists
-                        result = await session.execute(text("PRAGMA table_info(sessions);"))
-                        existing_columns = [row[1] for row in result.fetchall()]
-
-                        if column_name not in existing_columns:
-                            alter_query = text(f"ALTER TABLE sessions ADD COLUMN {column_name} {column_type};")
-                            await session.execute(alter_query)
-                            print(f"✅ Added column: {column_name}")
-
-                    # Create indexes for SQLite
-                    try:
-                        await session.execute(text("CREATE INDEX idx_sessions_topic_type ON sessions(topic_type);"))
-                    except:
-                        pass  # Index might already exist
-
-                    try:
-                        await session.execute(text("CREATE INDEX idx_sessions_topic_source ON sessions(topic_source);"))
-                    except:
-                        pass  # Index might already exist
-
-                    # Update existing data
-                    await session.execute(text("""
-                        UPDATE sessions
-                        SET
-                            final_topic_content = topic,
-                            topic_type = 'manual',
-                            topic_source = 'manual'
-                        WHERE final_topic_content IS NULL OR final_topic_content = '';
-                    """))
-
-                    await session.execute(text("""
-                        UPDATE sessions
-                        SET final_topic_content = topic
-                        WHERE final_topic_content IS NULL;
-                    """))
-
-                await session.execute(migration_sql) if db_type == "postgresql" else None
-                await session.commit()
-                print("✅ Topic tracking fields added successfully")
-            else:
-                print("ℹ️ Topic tracking fields already exist in sessions table")
-
-        except Exception as e:
-            await session.rollback()
-            print(f"❌ Failed to add topic tracking fields: {e}")
-            raise
-
-
 async def run_migrations():
     """Run all pending migrations."""
     print("🔄 Running database migrations...")
@@ -512,5 +392,13 @@ async def run_migrations():
     await drop_scores_table()
     await add_deleted_at_column()
     await add_student_token_column()
-    await add_topic_tracking_fields()  # Add this line
+
+    # Add topic tracking fields migration
+    from app.migrations.add_topic_tracking_fields import migrate_add_topic_tracking_fields
+    await migrate_add_topic_tracking_fields()
+
+    # Migrate messages table to JSON storage
+    from app.migrations.migrate_messages_to_json import migrate_messages_to_json
+    await migrate_messages_to_json()
+
     print("✅ Migrations completed")
