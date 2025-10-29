@@ -672,10 +672,10 @@ body {
 
     /* 데스크톱에서 progress-section 높이를 chat-section과 맞춤 */
     .progress-section {
-        height: calc(100vh - 40px); /* chat-main과 동일한 높이 계산 */
+        height: calc(100vh - 20px); /* 기본 여백만 적용 */
         gap: 0;
         padding: 0;
-        margin-top: 20px; /* chat-main의 상단 패딩과 맞춤 */
+        margin-top: 0; /* 추가 여백 제거 */
     }
 
     /* 데스크톱에서 drawer-content가 전체 높이를 차지하도록 */
