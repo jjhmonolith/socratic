@@ -682,7 +682,7 @@ body {
         padding: 20px;
         display: flex;
         flex-direction: column;
-        gap: 25px; /* 박스들 사이 적절한 간격 */
+        gap: 20px; /* chat-main의 gap과 동일하게 맞춤 */
         overflow-y: auto;
     }
 }
