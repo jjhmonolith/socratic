@@ -126,6 +126,7 @@ URL: ${window.location.href}
             // Public API returns flat structure, wrap to match expected structure
             this.sessionData = {
                 config: {
+                    title: sessionInfo.session.title,
                     topic: sessionInfo.session.topic,
                     description: sessionInfo.session.description,
                     difficulty: sessionInfo.session.difficulty,
@@ -321,7 +322,7 @@ URL: ${window.location.href}
     populateSessionInfo() {
         const config = this.sessionData.config || {};
         const elements = {
-            'session-topic': config.topic || '소크라테스 세션',
+            'session-topic': config.title || '소크라테스 세션',
             'session-description': config.description || '소크라테스 방식으로 학습해보세요.',
             'session-difficulty': this.getDifficultyText(config.difficulty),
         };

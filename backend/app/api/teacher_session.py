@@ -231,14 +231,13 @@ async def get_session_info(session_id: str):
             topic=db_session.topic,
             description=db_session.description,
             difficulty=db_session.difficulty,
-            show_score=db_session.show_score,
-            time_limit=db_session.time_limit,
-            max_students=db_session.max_students
+            show_score=db_session.show_score
         )
 
         return {
             "session": {
                 "id": session_id,
+                "title": config.title,
                 "topic": config.topic,
                 "description": config.description,
                 "difficulty": config.difficulty,

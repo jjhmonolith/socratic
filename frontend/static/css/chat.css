@@ -644,9 +644,24 @@ body {
     .input-section-mobile {
         display: none !important;
     }
-    
+
     .drawer-handle-fixed-area {
         display: none;
+    }
+
+    /* 데스크톱에서 파란 배너(chat-header) 숨김 */
+    .chat-header {
+        display: none !important;
+    }
+
+    /* 데스크톱에서 chat-main 높이 조정 (header 없으므로) */
+    .chat-main {
+        min-height: 100vh;
+    }
+
+    /* 데스크톱에서 messages-container 높이 조정 */
+    .messages-container {
+        height: calc(100vh - 200px);
     }
 }
 
