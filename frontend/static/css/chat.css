@@ -663,6 +663,28 @@ body {
     .messages-container {
         height: calc(100vh - 200px);
     }
+
+    /* 데스크톱에서 점수 보기 제목 숨김 */
+    .drawer-handle-area {
+        display: none;
+    }
+
+    /* 데스크톱에서 progress-section 높이를 chat-section과 맞춤 */
+    .progress-section {
+        height: calc(100vh - 40px); /* 상하 여백 20px씩 */
+        gap: 0;
+        padding: 0;
+    }
+
+    /* 데스크톱에서 drawer-content가 전체 높이를 차지하도록 */
+    .drawer-content {
+        height: 100%;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 25px; /* 박스들 사이 적절한 간격 */
+        overflow-y: auto;
+    }
 }
 
 @keyframes swipeHint {
