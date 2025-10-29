@@ -681,10 +681,10 @@ body {
     /* 데스크톱에서 drawer-content가 전체 높이를 차지하도록 */
     .drawer-content {
         height: 100%;
-        padding: 15px 0 20px 0; /* 상단에도 15px 패딩 추가 */
+        padding: 0 0 20px 0; /* 맨 위 박스 상단 여백 제거 */
         display: flex;
         flex-direction: column;
-        gap: 15px; /* 모든 박스 간 동일한 간격 */
+        gap: 10px; /* 소크라테스식 대화 팁과 동일한 간격으로 줄임 */
         overflow-y: auto;
     }
 
