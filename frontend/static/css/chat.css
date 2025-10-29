@@ -696,6 +696,13 @@ body {
         margin-top: 0;
         margin-bottom: 0;
     }
+
+    /* 대화 팁 박스와 5차원 평가 박스 사이 간격 조정 */
+    .learning-tips + .dimension-container,
+    .learning-tips + .growth-container,
+    .learning-tips + .focus-container {
+        margin-top: 10px; /* 다른 박스들과 동일한 간격 추가 */
+    }
 }
 
 @keyframes swipeHint {
