@@ -656,13 +656,14 @@ body {
 
     /* 데스크톱에서 chat-main 높이 조정 (header 없으므로) */
     .chat-main {
-        min-height: 100vh;
-        padding-top: 20px; /* 헤더 없으므로 상단 패딩 유지 */
+        height: 100vh; /* min-height에서 height로 변경 */
+        padding: 20px; /* 상하좌우 균등 패딩 */
+        box-sizing: border-box; /* 패딩 포함한 크기 계산 */
     }
 
     /* 데스크톱에서 chat-section을 뷰포트 높이로 고정 */
     .chat-section {
-        height: calc(100vh - 40px); /* 상하 여백 20px씩 */
+        height: calc(100% - 0px); /* chat-main 패딩 내에서 전체 높이 사용 */
         overflow: hidden; /* 외부 스크롤 방지 */
     }
 
@@ -686,7 +687,7 @@ body {
 
     /* 데스크톱에서 progress-section 높이를 chat-section과 맞춤 */
     .progress-section {
-        height: calc(100vh - 20px); /* 기본 여백만 적용 */
+        height: 100%; /* chat-main 패딩 내에서 전체 높이 사용 */
         gap: 0;
         padding: 0;
         margin-top: 0; /* 추가 여백 제거 */
