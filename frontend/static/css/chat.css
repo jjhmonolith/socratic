@@ -663,8 +663,10 @@ body {
 
     /* 데스크톱에서 chat-section을 뷰포트 높이로 고정 */
     .chat-section {
-        height: calc(100% - 0px); /* chat-main 패딩 내에서 전체 높이 사용 */
+        height: calc(100vh - 40px); /* 고정 높이로 복원 */
         overflow: hidden; /* 외부 스크롤 방지 */
+        display: flex; /* flexbox 레이아웃 명시 */
+        flex-direction: column; /* 세로 방향 배치 */
     }
 
     /* 데스크톱에서 messages-container 내부 스크롤 설정 */
@@ -687,7 +689,7 @@ body {
 
     /* 데스크톱에서 progress-section 높이를 chat-section과 맞춤 */
     .progress-section {
-        height: 100%; /* chat-main 패딩 내에서 전체 높이 사용 */
+        height: calc(100vh - 40px); /* chat-section과 동일한 고정 높이 */
         gap: 0;
         padding: 0;
         margin-top: 0; /* 추가 여백 제거 */
