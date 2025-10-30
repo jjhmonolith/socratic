@@ -660,9 +660,23 @@ body {
         padding-top: 20px; /* 헤더 없으므로 상단 패딩 유지 */
     }
 
-    /* 데스크톱에서 messages-container 높이 조정 */
+    /* 데스크톱에서 chat-section을 뷰포트 높이로 고정 */
+    .chat-section {
+        height: calc(100vh - 40px); /* 상하 여백 20px씩 */
+        overflow: hidden; /* 외부 스크롤 방지 */
+    }
+
+    /* 데스크톱에서 messages-container 내부 스크롤 설정 */
     .messages-container {
-        height: calc(100vh - 200px);
+        height: calc(100% - 120px); /* 입력창 영역 제외 */
+        overflow-y: auto;
+        flex: none; /* flex: 1 제거하여 고정 높이 사용 */
+    }
+
+    /* 데스크톱에서 입력창을 하단에 고정 */
+    .input-section {
+        flex-shrink: 0; /* 크기 축소 방지 */
+        margin-top: auto; /* 하단으로 밀어내기 */
     }
 
     /* 데스크톱에서 점수 보기 제목 숨김 */

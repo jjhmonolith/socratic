@@ -118,19 +118,26 @@ class QRGenerator {
         }
     }
 
-    copyToClipboard(text) {
+    async copyToClipboard(text) {
+        if (!text) {
+            console.error('No text provided to copy');
+            return false;
+        }
+
+        // Try modern clipboard API first
         if (navigator.clipboard && navigator.clipboard.writeText) {
-            return navigator.clipboard.writeText(text)
-                .then(() => {
-                    console.log('Link copied to clipboard');
-                    return true;
-                })
-                .catch(err => {
-                    console.error('Failed to copy link:', err);
-                    return false;
-                });
-        } else {
-            // Fallback for older browsers
+            try {
+                await navigator.clipboard.writeText(text);
+                console.log('Link copied to clipboard');
+                return true;
+            } catch (err) {
+                console.error('Failed to copy link with clipboard API:', err);
+                // Fall back to legacy method
+            }
+        }
+
+        // Fallback for older browsers or when clipboard API fails
+        try {
             const textArea = document.createElement('textarea');
             textArea.value = text;
             textArea.style.position = 'fixed';
@@ -140,20 +147,19 @@ class QRGenerator {
             textArea.focus();
             textArea.select();
 
-            try {
-                const successful = document.execCommand('copy');
-                document.body.removeChild(textArea);
-                if (successful) {
-                    console.log('Link copied to clipboard (fallback)');
-                    return Promise.resolve(true);
-                } else {
-                    return Promise.resolve(false);
-                }
-            } catch (err) {
-                document.body.removeChild(textArea);
-                console.error('Failed to copy link (fallback):', err);
-                return Promise.resolve(false);
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textArea);
+
+            if (successful) {
+                console.log('Link copied to clipboard (fallback)');
+                return true;
+            } else {
+                console.error('Document.execCommand copy failed');
+                return false;
             }
+        } catch (err) {
+            console.error('Failed to copy link (fallback):', err);
+            return false;
         }
     }
 }
